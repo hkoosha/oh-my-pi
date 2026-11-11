@@ -387,6 +387,13 @@ export class EventController {
 					})
 				: null,
 		);
+		// Spoken replies synthesize with this session's speech role (built-in local
+		// models or extension engines); null falls back to the default local model.
+		vocalizer.setModelSource(
+			session?.modelRegistry && session.settings
+				? { settings: session.settings, registry: session.modelRegistry }
+				: null,
+		);
 		this.#streamingReveal = new StreamingRevealController({
 			// Extension text renderers get the full text so far on each drawn update (deltas within one
 			// frame are coalesced), never a partly revealed prefix from the typing reveal. A terminal that
