@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Extensions can register in-process text-to-speech engines with `pi.registerTtsEngine(provider, { model, name, synthesize })`; selected through `modelRoles.speech`, they drive spoken replies, `omp say`, and the `tts` tool
+
 ## [18.18.8] - 2026-11-11
 
 ### Changed

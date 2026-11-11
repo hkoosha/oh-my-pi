@@ -14,6 +14,7 @@ import {
 	smokeTestWorker,
 } from "../subprocess/worker-client";
 import { tinyWorkerEnv } from "../tiny/title-client";
+import { disposeTtsEngines, engineVoice, getTtsEngine, type TtsEngine } from "./engines";
 import { getTtsLocalModelSpec, isTtsLocalModelKey, type TtsLocalModelKey } from "./models";
 import type { TtsProgressEvent, TtsWorkerInbound, TtsWorkerOutbound } from "./tts-protocol";
 
@@ -175,8 +176,10 @@ export class TtsClient {
 	}
 
 	async synthesize(modelKey: string, text: string, options: TtsSynthesizeOptions = {}): Promise<TtsAudio | null> {
-		if (!isTtsLocalModelKey(modelKey)) return null;
 		if (options.signal?.aborted) return null;
+		const engine = getTtsEngine(modelKey);
+		if (engine) return synthesizeWithEngine(engine, modelKey, text, options);
+		if (!isTtsLocalModelKey(modelKey)) return null;
 
 		try {
 			return await this.#host.request<TtsAudio | null>(
@@ -210,6 +213,8 @@ export class TtsClient {
 	 * cannot spawn.
 	 */
 	synthesizeStream(modelKey: string, options: TtsStreamOptions = {}): TtsStreamHandle {
+		const engine = options.signal?.aborted ? undefined : getTtsEngine(modelKey);
+		if (engine) return streamWithEngine(engine, modelKey, options);
 		if (!isTtsLocalModelKey(modelKey) || options.signal?.aborted) {
 			const channel = new AudioChunkChannel();
 			channel.close();
@@ -313,10 +318,71 @@ export class TtsClient {
 	}
 }
 
+async function synthesizeWithEngine(
+	engine: TtsEngine,
+	modelKey: string,
+	text: string,
+	options: TtsSynthesizeOptions,
+): Promise<TtsAudio | null> {
+	try {
+		return await engine.synthesize(text, {
+			voice: engineVoice(engine, options.voice),
+			speed: options.speed,
+			signal: options.signal ?? new AbortController().signal,
+		});
+	} catch (error) {
+		logger.debug("tts: extension engine synthesis failed", { modelKey, error: toError(error).message });
+		return null;
+	}
+}
+
+/**
+ * Stream through an extension engine: segments synthesize one at a time in
+ * push order, so audio stays ordered and the engine never sees overlapping
+ * requests from one session. Abort closes the stream like a worker cancel.
+ */
+function streamWithEngine(engine: TtsEngine, modelKey: string, options: TtsStreamOptions): TtsStreamHandle {
+	const controller = new AbortController();
+	const onAbort = (): void => {
+		controller.abort();
+		channel.close();
+	};
+	const channel = new AudioChunkChannel(() => options.signal?.removeEventListener("abort", onAbort));
+	options.signal?.addEventListener("abort", onAbort, { once: true });
+	const request = { voice: engineVoice(engine, options.voice), speed: options.speed, signal: controller.signal };
+	let tail: Promise<void> = Promise.resolve();
+	let index = 0;
+	let ended = false;
+	return {
+		push: (text: string) => {
+			if (ended || controller.signal.aborted) return;
+			const segment = index++;
+			tail = tail.then(async () => {
+				if (controller.signal.aborted) return;
+				try {
+					const audio = await engine.synthesize(text, request);
+					if (!controller.signal.aborted) channel.push({ index: segment, text, ...audio });
+				} catch (error) {
+					if (controller.signal.aborted) return;
+					logger.debug("tts: extension engine stream failed", { modelKey, error: toError(error).message });
+					controller.abort();
+					channel.fail(toError(error));
+				}
+			});
+		},
+		end: () => {
+			if (ended) return;
+			ended = true;
+			void tail.then(() => channel.close());
+		},
+		chunks: channel.iterator(),
+	};
+}
+
 export const ttsClient = new TtsClient();
 
 export async function shutdownTtsClient(): Promise<void> {
-	await ttsClient.terminate();
+	await Promise.all([ttsClient.terminate(), disposeTtsEngines()]);
 }
 
 export async function smokeTestTtsWorker({

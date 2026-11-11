@@ -109,6 +109,8 @@ import type { ApprovalMode } from "../../tools/approval";
 import type { BashToolDetails } from "@oh-my-pi/pi-tui/tools/bash";
 import type { FileDeleteFallbackHandler, FileWriteFallbackHandler } from "../../tools/file-write-fallback";
 import type { EventBus } from "../../utils/event-bus";
+import type { TtsEngine } from "../../tts/engines";
+export type { TtsEngine, TtsEngineAudio, TtsEngineRequest } from "../../tts/engines";
 import type {
 	AgentEndEvent,
 	AgentStartEvent,
@@ -2250,6 +2252,22 @@ export interface ExtensionAPI {
 	 */
 	unregisterProvider(name: string): void;
 
+	/**
+	 * Register an in-process text-to-speech engine as the speech model
+	 * `provider/config.model` (api `local-inference`, kind `tts`). Select it with
+	 * `modelRoles.speech`; then spoken replies (`speech.enabled`), `omp say`, and
+	 * the `tts` tool synthesize through `config.synthesize`, one speakable segment
+	 * per call, in order. Replaces the provider's models, like `registerProvider`.
+	 *
+	 * @example
+	 * pi.registerTtsEngine("orksay", {
+	 *   model: "peon",
+	 *   name: "Orc Peon",
+	 *   synthesize: async (text, { signal }) => ({ pcm, sampleRate: 22050 }),
+	 * });
+	 */
+	registerTtsEngine(provider: string, config: TtsEngineConfig): void;
+
 	/** Shared event bus for extension communication. */
 	events: EventBus;
 }
@@ -2303,6 +2321,12 @@ export interface ProviderConfig {
 	 * alongside the live catalog.
 	 */
 	fetchDynamicModels?: (apiKey: string | undefined) => Promise<readonly ProviderModelConfig[]>;
+}
+
+/** Engine registered via pi.registerTtsEngine(); see {@link TtsEngine} for synthesis semantics. */
+export interface TtsEngineConfig extends TtsEngine {
+	/** Model id under the provider; the speech role selects `provider/model`. */
+	model: string;
 }
 
 /** Configuration for a model within a provider. */

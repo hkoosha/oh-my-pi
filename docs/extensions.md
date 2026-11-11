@@ -241,6 +241,36 @@ RPC rejects secret prompts instead of forwarding them as ordinary input. SDK
 hosts implementing `onPrompt` must honor `secret` or reject the prompt. Masking
 does not provide encryption, memory erasure, or general log redaction.
 
+### Text-to-speech engines
+
+`pi.registerTtsEngine(provider, config)` adds an in-process speech engine as the
+`local-inference` speech model `provider/config.model` (kind `tts`). It replaces the
+provider's models, like `registerProvider`. Select it with `modelRoles.speech`; then
+spoken replies (`speech.enabled`), `omp say` (which loads extensions first), and the
+`tts` tool synthesize through it instead of Kokoro.
+
+```ts
+pi.registerTtsEngine("orksay", {
+	model: "peon",
+	name: "Orc Peon",
+	voices: ["peon"], // optional; other voice ids are not forwarded
+	async synthesize(text, { voice, speed, signal }) {
+		return { pcm: new Float32Array(/* mono, -1..1 */), sampleRate: 22050 };
+	},
+	dispose() {}, // optional; runs when `omp say` finishes
+});
+```
+
+`synthesize` receives one speakable segment (code, tables, and markup already
+removed). Streaming sessions call it sequentially in segment order, so playback
+starts after the first segment. `signal` aborts on interrupts, new turns, and
+shutdown; an aborted session discards later results. A rejection ends that
+utterance; one-shot `tts` calls report it as a failed synthesis. Engines run in the
+OMP process, so keep heavy work in a child process or worker.
+
+`pi.pi.vocalizer.isSpeaking()` is true while a spoken reply is still synthesizing or
+audible; poll it to play an extension's own sounds after the reply instead of over it.
+
 ### Command-backed providers
 
 `registerProvider` also supports providers whose transport is implemented by the

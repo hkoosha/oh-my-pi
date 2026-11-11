@@ -1,12 +1,13 @@
 /**
- * Synthesize text with the local TTS engine and play it (or save it with --out).
+ * Synthesize text with local TTS and play it (or save it with --out).
  *
  * Text comes from the argument or --file. Input is segmented into
  * sentence-sized chunks ({@link SpeakableStream}) and synthesized through the
- * streaming TTS worker, so arbitrarily long text plays gaplessly instead of
+ * streaming TTS client, so arbitrarily long text plays gaplessly instead of
  * hitting Kokoro's single-call ~510-phoneme truncation. --out concatenates the
- * streamed segments into one WAV. The first run downloads the configured local
- * model into the worker's cache.
+ * streamed segments into one WAV. Extensions are loaded first so engines from
+ * `pi.registerTtsEngine` (keyed `provider/model`) are selectable. The first
+ * run of a built-in model downloads it into the worker's cache.
  */
 
 import { getProjectDir } from "@oh-my-pi/pi-utils";
@@ -15,7 +16,8 @@ import { Args, Command, Flags } from "@oh-my-pi/pi-utils/cli";
 import { sayHelp as commandHelp } from "../cli/command-help";
 import { ModelRegistry } from "../config/model-registry";
 import { Settings } from "../config/settings";
-import { discoverAuthStorage } from "../sdk";
+import { discoverAuthStorage, loadCliExtensionProviders } from "../sdk";
+import { engineVoice, getTtsEngine } from "../tts/engines";
 import { TTS_LOCAL_VOICE_VALUES } from "../tts/models";
 import { SpeakableStream } from "../tts/speakable";
 import { StreamingAudioPlayer } from "../tts/streaming-player";
@@ -34,7 +36,7 @@ export default class Say extends Command {
 	static flags = {
 		voice: Flags.string({ description: "Voice id", options: TTS_LOCAL_VOICE_VALUES }),
 		speed: Flags.string({ description: "Speaking rate, 0.5–2.5 (1 = normal; default: tts.localSpeed)" }),
-		model: Flags.string({ description: "Local TTS model key" }),
+		model: Flags.string({ description: "Local TTS model key, or provider/model for an extension engine" }),
 		file: Flags.string({ char: "f", description: "Read the text to speak from this file" }),
 		out: Flags.string({ char: "o", description: "Write WAV to this path instead of playing" }),
 	};
@@ -53,8 +55,11 @@ export default class Say extends Command {
 		}
 
 		const settings = await Settings.init({ cwd: getProjectDir() });
-		const model = flags.model ?? (await this.#resolveDefaultModel(settings));
+		const resolvedModel = await this.#loadEnginesAndResolveModel(settings);
+		const model = flags.model ?? resolvedModel;
 		const voice = flags.voice ?? cfgTtsLocalVoice.get(settings);
+		const engine = getTtsEngine(model);
+		const shownVoice = engine ? (engineVoice(engine, voice) ?? "default voice") : voice;
 		const speed = flags.speed === undefined ? cfgTtsLocalSpeed.get(settings) : Number(flags.speed);
 		if (!Number.isFinite(speed) || speed <= 0) {
 			process.stderr.write(chalk.red(`error: invalid --speed: ${flags.speed}\n`));
@@ -112,7 +117,7 @@ export default class Say extends Command {
 				const durationSec = total / sampleRate;
 				process.stdout.write(
 					`${chalk.green("saved")} ${flags.out} ` +
-						`${chalk.dim(`(${voice}, ${model}, ${durationSec.toFixed(1)}s, ${wav.byteLength} bytes)`)}\n`,
+						`${chalk.dim(`(${shownVoice}, ${model}, ${durationSec.toFixed(1)}s, ${wav.byteLength} bytes)`)}\n`,
 				);
 				return;
 			}
@@ -134,7 +139,7 @@ export default class Say extends Command {
 			}
 			await player.end();
 			process.stdout.write(
-				`${chalk.green("spoke")} ${chalk.dim(`(${voice}, ${model}, ${seconds.toFixed(1)}s, ${spoken} segments)`)}\n`,
+				`${chalk.green("spoke")} ${chalk.dim(`(${shownVoice}, ${model}, ${seconds.toFixed(1)}s, ${spoken} segments)`)}\n`,
 			);
 		} catch (err) {
 			process.stderr.write(chalk.red(`error: ${err instanceof Error ? err.message : String(err)}\n`));
@@ -147,10 +152,12 @@ export default class Say extends Command {
 		if (exitCode !== 0) process.exit(exitCode);
 	}
 
-	async #resolveDefaultModel(settings: Settings): Promise<string> {
+	/** Load extension TTS engines (they register at extension load) and resolve the speech role. */
+	async #loadEnginesAndResolveModel(settings: Settings): Promise<string> {
 		const authStorage = await discoverAuthStorage(undefined, { settings });
 		try {
 			const registry = new ModelRegistry(authStorage, undefined, { settings });
+			await loadCliExtensionProviders(registry, settings, getProjectDir(), { discoverModels: false });
 			return resolveLocalSpeechModelId({ settings, registry });
 		} finally {
 			authStorage.close();
@@ -160,7 +167,7 @@ export default class Say extends Command {
 	#synthesisFailed(model: string): void {
 		process.stderr.write(
 			chalk.red(
-				`error: could not synthesize with local TTS model "${model}". Run \`omp setup speech\` to install it.\n`,
+				`error: could not synthesize with local TTS model "${model}". Run \`omp setup speech\` to install built-in models, or check the extension providing it.\n`,
 			),
 		);
 	}

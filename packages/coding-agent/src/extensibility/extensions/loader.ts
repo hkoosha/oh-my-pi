@@ -31,6 +31,7 @@ import type { CustomMessagePayload } from "../../session/messages";
 import type { FileDeleteFallbackHandler, FileWriteFallbackHandler } from "../../tools/file-write-fallback";
 import { isFilesystemSourcePath } from "../../tools/path-utils";
 import { InternalUrlRouter } from "../../internal-urls/router";
+import { registerTtsEngine, ttsEngineKey } from "../../tts/engines";
 import { EventBus } from "../../utils/event-bus";
 import * as TypeBox from "../legacy-typebox";
 import { resolveExtensionDirectory } from "./directory-resolution";
@@ -58,6 +59,7 @@ import type {
 	ToolDefinition,
 	ToolInfo,
 	TranscriptPresenter,
+	TtsEngineConfig,
 } from "./types";
 
 installLegacyPiSpecifierShim();
@@ -442,6 +444,31 @@ class ConcreteExtensionAPI implements ExtensionAPI, IExtensionRuntime {
 
 	unregisterProvider(name: string): void {
 		this.runtime.unregisterProvider(name, this.extension.path);
+	}
+
+	registerTtsEngine(provider: string, config: TtsEngineConfig): void {
+		const { model, ...engine } = config;
+		if (!provider || !model) throw new TypeError("registerTtsEngine requires a provider and config.model");
+		if (typeof engine.synthesize !== "function") throw new TypeError("registerTtsEngine requires config.synthesize");
+		registerTtsEngine(ttsEngineKey(provider, model), engine);
+		this.registerProvider(provider, {
+			baseUrl: `local://${provider}`,
+			// Keyless and in-process; a literal key marks the provider available.
+			apiKey: "local-tts-engine",
+			api: "local-inference",
+			models: [
+				{
+					id: model,
+					name: engine.name,
+					kind: "tts",
+					reasoning: false,
+					input: ["text"],
+					cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+					contextWindow: 4096,
+					maxTokens: 4096,
+				},
+			],
+		});
 	}
 }
 

@@ -75,6 +75,8 @@ export type {
 export * from "./tools";
 export * from "./tools/hashline-header-path";
 export * from "./utils/github";
+// Spoken-reply state, so extensions can sequence their own audio after OMP's speech.
+export { vocalizer } from "./tts/vocalizer";
 // UI components for extensions
 export {
 	HookEditorComponent as ExtensionEditorComponent,

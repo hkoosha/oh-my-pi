@@ -42,6 +42,7 @@ import { logger } from "@oh-my-pi/pi-utils";
 import { resolveRoleChain } from "../config/model-resolver";
 import { roleCandidatePool } from "../config/model-roles";
 import { type Settings, settings } from "../config/settings";
+import { localSpeechModelKey } from "./engines";
 import { DEFAULT_TTS_VOICE, TTS_LOCAL_MODELS } from "./models";
 import { SpeakableStream } from "./speakable";
 import { BlockAccumulator, type SpeechEnhancer } from "./speech-enhancer";
@@ -62,13 +63,16 @@ export interface VocalizerModelSource {
 	registry: ModelBrowserRegistry;
 }
 
-/** Resolve the first speech-role candidate that the local streaming worker can run. */
+/**
+ * Resolve the first speech-role candidate that local synthesis can run: a
+ * built-in worker model, or an extension engine keyed `provider/model`.
+ */
 export function resolveLocalSpeechModelId(source: VocalizerModelSource): string {
 	const pool = roleCandidatePool("speech", source.settings, source.registry);
 	const local = resolveRoleChain("speech", source.settings, pool).find(
 		candidate => candidate.model.api === "local-inference",
 	);
-	return local?.model.id ?? TTS_LOCAL_MODELS[0].key;
+	return local ? localSpeechModelKey(local.model) : TTS_LOCAL_MODELS[0].key;
 }
 
 export interface VocalizerPlayer {

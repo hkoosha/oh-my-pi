@@ -14,6 +14,7 @@ import { roleCandidatePool } from "../config/model-roles";
 import { settings, type Settings } from "../config/settings";
 import type { CustomTool, CustomToolContext } from "../extensibility/custom-tools/types";
 import ttsDescription from "../prompts/tools/tts.md" with { type: "text" };
+import { engineVoice, getTtsEngine, localSpeechModelKey } from "../tts/engines";
 import { DEFAULT_TTS_VOICE, KOKORO_VOICES } from "../tts/models";
 import { ttsClient } from "../tts/tts-client";
 import { encodeWav } from "../tts/wav";
@@ -146,14 +147,17 @@ async function synthesizeLocal(
 ): Promise<AgentToolResult<TtsToolDetails, TtsSchemaType>> {
 	const voice = readLocalVoice(settingsInstance);
 	const speed = cfgTtsLocalSpeed.get(settingsInstance);
-	const audio = await ttsClient.synthesize(model.id, params.text, { voice, speed, signal });
+	const modelKey = localSpeechModelKey(model);
+	const engine = getTtsEngine(modelKey);
+	const voiceId = engine ? (engineVoice(engine, voice) ? `${modelKey}/${voice}` : modelKey) : `${model.id}/${voice}`;
+	const audio = await ttsClient.synthesize(modelKey, params.text, { voice, speed, signal });
 	if (!audio) {
 		return {
 			isError: true,
 			content: [
 				{
 					type: "text",
-					text: `Local TTS synthesis failed (model=${model.id}). The on-device worker may be unavailable or the model download was interrupted.`,
+					text: `Local TTS synthesis failed (model=${modelKey}). The on-device worker or extension engine may be unavailable, or the model download was interrupted.`,
 				},
 			],
 		};
@@ -171,10 +175,10 @@ async function synthesizeLocal(
 		content: [
 			{
 				type: "text",
-				text: `Saved ${wav.length} bytes to ${displayPath} (voice=${model.id}/${voice}, codec=wav, backend=local, ${audio.sampleRate} Hz).${note}`,
+				text: `Saved ${wav.length} bytes to ${displayPath} (voice=${voiceId}, codec=wav, backend=local, ${audio.sampleRate} Hz).${note}`,
 			},
 		],
-		details: { bytes: wav.length, voiceId: `${model.id}/${voice}`, codec: "wav", backend: "local-inference" },
+		details: { bytes: wav.length, voiceId, codec: "wav", backend: "local-inference" },
 	};
 }
 
